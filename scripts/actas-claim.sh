@@ -32,6 +32,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"  # actas-lock.sh requires SKILL_DIR
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/actas-lock.sh"
+source "$SCRIPT_DIR/lib/safety.sh"
+
+agmsg_validate_type "$TYPE"
+agmsg_validate_name "agent" "$NAME"
 
 # Find the team(s) this name is registered to for the given project/type.
 TEAMS=""

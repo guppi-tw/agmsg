@@ -18,10 +18,14 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
+source "$SCRIPT_DIR/lib/safety.sh"
 TEAMS_DIR="$SCRIPT_DIR/../teams"
 DB="$(agmsg_db_path)"
 OLD_DIR="$TEAMS_DIR/$OLD_TEAM"
 NEW_DIR="$TEAMS_DIR/$NEW_TEAM"
+
+agmsg_validate_name "old team" "$OLD_TEAM"
+agmsg_validate_name "new team" "$NEW_TEAM"
 
 if [ ! -d "$OLD_DIR" ]; then
   echo "Team not found: $OLD_TEAM"
@@ -39,15 +43,14 @@ mv "$OLD_DIR" "$NEW_DIR"
 # --- Update name in config.json ---
 NEW_CONFIG="$NEW_DIR/config.json"
 if [ -f "$NEW_CONFIG" ]; then
-  CONFIG_ESCAPED=$(sed "s/'/''/g" "$NEW_CONFIG")
-  UPDATED=$(sqlite3 :memory: ".param set :json '$CONFIG_ESCAPED'" \
-    "SELECT json_set(:json, '\$.name', '$NEW_TEAM');")
+  CONFIG_SQL=$(agmsg_sql_literal "$(cat "$NEW_CONFIG")")
+  UPDATED=$(sqlite3 :memory: "SELECT json_set($CONFIG_SQL, '\$.name', $(agmsg_sql_literal "$NEW_TEAM"));")
   echo "$UPDATED" > "$NEW_CONFIG"
 fi
 
 # --- Update messages in DB ---
 if [ -f "$DB" ]; then
-  sqlite3 "$DB" "UPDATE messages SET team='$NEW_TEAM' WHERE team='$OLD_TEAM';"
+  sqlite3 "$DB" "UPDATE messages SET team=$(agmsg_sql_literal "$NEW_TEAM") WHERE team=$(agmsg_sql_literal "$OLD_TEAM");"
 fi
 
 echo "Renamed team $OLD_TEAM → $NEW_TEAM"

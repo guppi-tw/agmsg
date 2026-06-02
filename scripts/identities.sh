@@ -17,19 +17,25 @@ PROJECT_PATH="${1:?Usage: identities.sh <project_path> <agent_type>}"
 AGENT_TYPE="${2:?Missing agent_type}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/safety.sh"
 TEAMS_DIR="$SCRIPT_DIR/../teams"
+
+agmsg_validate_type "$AGENT_TYPE"
+PROJECT_PATH_SQL=$(agmsg_sql_literal "$PROJECT_PATH")
+AGENT_TYPE_SQL=$(agmsg_sql_literal "$AGENT_TYPE")
 
 [ -d "$TEAMS_DIR" ] || exit 0
 
 for config_file in "$TEAMS_DIR"/*/config.json; do
   [ -f "$config_file" ] || continue
-  CONFIG_ESCAPED=$(sed "s/'/''/g" "$config_file")
-  TEAM_NAME=$(sqlite3 :memory: ".param set :json '$CONFIG_ESCAPED'" \
-    "SELECT json_extract(:json, '\$.name');")
+  CONFIG_SQL=$(agmsg_sql_literal "$(cat "$config_file")")
+  TEAM_NAME=$(sqlite3 :memory: "SELECT json_extract($CONFIG_SQL, '\$.name');")
   [ -z "$TEAM_NAME" ] && continue
   [ "$TEAM_NAME" = "null" ] && continue
+  agmsg_validate_name "team" "$TEAM_NAME"
+  TEAM_NAME_SQL=$(agmsg_sql_literal "$TEAM_NAME")
 
-  sqlite3 -separator $'\t' :memory: ".param set :json '$CONFIG_ESCAPED'" "
+  sqlite3 -separator $'\t' :memory: "
     WITH agents AS (
       SELECT
         key AS name,
@@ -37,12 +43,12 @@ for config_file in "$TEAMS_DIR"/*/config.json; do
           WHEN json_type(json_extract(value, '\$.registrations')) = 'array' THEN json_extract(value, '\$.registrations')
           ELSE json_array(json_object('type', json_extract(value, '\$.type'), 'project', json_extract(value, '\$.project')))
         END AS registrations
-      FROM json_each(json_extract(:json, '\$.agents'))
+      FROM json_each(json_extract($CONFIG_SQL, '\$.agents'))
     )
-    SELECT DISTINCT '$TEAM_NAME' AS team, name
+    SELECT DISTINCT $TEAM_NAME_SQL AS team, name
     FROM agents, json_each(agents.registrations) AS r
-    WHERE json_extract(r.value, '\$.project') = '$PROJECT_PATH'
-      AND json_extract(r.value, '\$.type') = '$AGENT_TYPE'
+    WHERE json_extract(r.value, '\$.project') = $PROJECT_PATH_SQL
+      AND json_extract(r.value, '\$.type') = $AGENT_TYPE_SQL
     ORDER BY team, name;
   "
 done

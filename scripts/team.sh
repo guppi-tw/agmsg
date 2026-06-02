@@ -7,7 +7,10 @@ set -euo pipefail
 TEAM="${1:?Usage: team.sh <team>}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/safety.sh"
 CONFIG="$SCRIPT_DIR/../teams/$TEAM/config.json"
+
+agmsg_validate_name "team" "$TEAM"
 
 if [ ! -f "$CONFIG" ]; then
   echo "Team not found: $TEAM"
@@ -18,6 +21,7 @@ echo "Team: $TEAM"
 echo ""
 
 COUNT=0
+CONFIG_SQL=$(agmsg_sql_literal "$(cat "$CONFIG")")
 while IFS='	' read -r name types project registrations; do
   if [ "${registrations:-0}" -gt 1 ]; then
     echo "  $name ($types) — $project (+$((registrations - 1)) more)"
@@ -25,16 +29,15 @@ while IFS='	' read -r name types project registrations; do
     echo "  $name ($types) — $project"
   fi
   COUNT=$((COUNT + 1))
-done < <(sqlite3 -separator '	' :memory: \
-  ".param set :json '$(sed "s/'/''/g" "$CONFIG")'" \
-  "WITH agents AS (
+done < <(sqlite3 -separator '	' :memory: "
+  WITH agents AS (
      SELECT
        key AS name,
        CASE
          WHEN json_type(json_extract(value, '$.registrations')) = 'array' THEN json_extract(value, '$.registrations')
          ELSE json_array(json_object('type', json_extract(value, '$.type'), 'project', json_extract(value, '$.project')))
        END AS registrations
-     FROM json_each(json_extract(:json, '$.agents'))
+     FROM json_each(json_extract($CONFIG_SQL, '$.agents'))
    )
    SELECT
      name,

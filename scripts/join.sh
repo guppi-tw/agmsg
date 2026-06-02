@@ -20,15 +20,20 @@ case "$AGENT_TYPE" in
 esac
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/safety.sh"
 TEAMS_DIR="$SCRIPT_DIR/../teams"
 TEAM_CONFIG="$TEAMS_DIR/$TEAM/config.json"
+
+agmsg_validate_name "team" "$TEAM"
+agmsg_validate_name "agent" "$AGENT_ID"
+agmsg_validate_type "$AGENT_TYPE"
 
 # --- Ensure team config exists ---
 mkdir -p "$TEAMS_DIR/$TEAM"
 if [ ! -f "$TEAM_CONFIG" ]; then
   cat > "$TEAM_CONFIG" <<EOF
 {
-  "name": "$TEAM",
+  "name": $(agmsg_json_string "$TEAM"),
   "agents": {},
   "created_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
@@ -37,12 +42,13 @@ EOF
 fi
 
 # --- Add or extend agent registrations ---
-CONFIG_ESCAPED=$(sed "s/'/''/g" "$TEAM_CONFIG")
-REGISTRATION="{\"type\":\"$AGENT_TYPE\",\"project\":\"$PROJECT_PATH\"}"
+CONFIG_SQL=$(agmsg_sql_literal "$(cat "$TEAM_CONFIG")")
+REGISTRATION="{\"type\":$(agmsg_json_string "$AGENT_TYPE"),\"project\":$(agmsg_json_string "$PROJECT_PATH")}"
 REGISTRATION_ESCAPED=$(printf '%s' "$REGISTRATION" | sed "s/'/''/g")
+AGENT_TYPE_SQL=$(agmsg_sql_literal "$AGENT_TYPE")
+PROJECT_PATH_SQL=$(agmsg_sql_literal "$PROJECT_PATH")
 
-EXISTING=$(sqlite3 :memory: ".param set :json '$CONFIG_ESCAPED'" \
-  "SELECT json_extract(:json, '$.agents.$AGENT_ID');")
+EXISTING=$(sqlite3 :memory: "SELECT json_extract($CONFIG_SQL, '$.agents.$AGENT_ID');")
 
 if [ -z "$EXISTING" ] || [ "$EXISTING" = "null" ]; then
   AGENT_OBJ="{\"registrations\":[${REGISTRATION}]}"
@@ -68,8 +74,8 @@ else
     SELECT EXISTS(
       SELECT 1
       FROM json_each(json_extract('$NORMALIZED_ESCAPED', '\$.registrations'))
-      WHERE json_extract(value, '\$.type') = '$AGENT_TYPE'
-        AND json_extract(value, '\$.project') = '$PROJECT_PATH'
+      WHERE json_extract(value, '\$.type') = $AGENT_TYPE_SQL
+        AND json_extract(value, '\$.project') = $PROJECT_PATH_SQL
     );
   ")
 
@@ -86,9 +92,7 @@ else
   fi
 fi
 
-UPDATED=$(sqlite3 :memory: \
-  ".param set :json '$CONFIG_ESCAPED'" \
-  "SELECT json_set(:json, '$.agents.$AGENT_ID', json('$(printf '%s' "$AGENT_OBJ" | sed "s/'/''/g")'));")
+UPDATED=$(sqlite3 :memory: "SELECT json_set($CONFIG_SQL, '$.agents.$AGENT_ID', json('$(printf '%s' "$AGENT_OBJ" | sed "s/'/''/g")'));")
 echo "$UPDATED" > "$TEAM_CONFIG"
 
 echo "Joined team $TEAM as $AGENT_ID"

@@ -14,7 +14,11 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
+source "$SCRIPT_DIR/lib/safety.sh"
 DB="$(agmsg_db_path)"
+
+agmsg_validate_name "team" "$TEAM"
+agmsg_validate_name "agent" "$AGENT"
 
 if [ ! -f "$DB" ]; then
   if [ "$QUIET" = true ]; then exit 0; fi
@@ -25,7 +29,7 @@ fi
 # Get unread messages — escape newlines/tabs in body to keep one record per line
 UNREAD=$(sqlite3 "$DB" "
   SELECT from_agent || char(31) || replace(replace(body, char(10), '\n'), char(9), '\t') || char(31) || created_at
-  FROM messages WHERE team='$TEAM' AND to_agent='$AGENT' AND read_at IS NULL
+  FROM messages WHERE team=$(agmsg_sql_literal "$TEAM") AND to_agent=$(agmsg_sql_literal "$AGENT") AND read_at IS NULL
   ORDER BY created_at ASC;
 ")
 
@@ -45,4 +49,4 @@ done <<< "$UNREAD"
 echo ""
 
 # Mark as read (non-fatal — may fail in sandboxed environments)
-sqlite3 "$DB" "UPDATE messages SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE team='$TEAM' AND to_agent='$AGENT' AND read_at IS NULL;" 2>/dev/null || true
+sqlite3 "$DB" "UPDATE messages SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE team=$(agmsg_sql_literal "$TEAM") AND to_agent=$(agmsg_sql_literal "$AGENT") AND read_at IS NULL;" 2>/dev/null || true

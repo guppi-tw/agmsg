@@ -32,6 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_NAME="$(basename "$SKILL_DIR")"
 RUN_DIR="$SKILL_DIR/run"
+source "$SCRIPT_DIR/lib/safety.sh"
 
 resolve_hooks_file() {
   local type="$1"
@@ -90,7 +91,7 @@ add_event_entry() {
   local event="$2"
   local cmd="$3"
 
-  local entry="{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":\"$cmd\"}]}"
+  local entry="{\"matcher\":\"\",\"hooks\":[{\"type\":\"command\",\"command\":$(agmsg_json_string "$cmd")}]}"
   local entry_esc
   entry_esc=$(printf '%s' "$entry" | sed "s/'/''/g")
 
@@ -142,12 +143,14 @@ apply_settings_gemini() {
   case "$mode" in
     turn|both)
       mkdir -p "$(dirname "$rule_file")"
+      local rule_cmd
+      rule_cmd="$(agmsg_shell_quote "$SKILL_DIR/scripts/check-inbox.sh") $(agmsg_shell_quote "$type") $(agmsg_shell_quote "$project")"
       cat <<EOF > "$rule_file"
 # agmsg Integration Rule
 
 ## PostToolUse
 After each tool call, automatically check the agmsg inbox for unread messages.
-- Command: '$SKILL_DIR/scripts/check-inbox.sh' '$type' '$project'
+- Command: $rule_cmd
 EOF
       ;;
     monitor)
@@ -184,19 +187,19 @@ apply_settings() {
   # 2) Re-add what this mode wants.
   case "$mode" in
     monitor)
-      local ss="'$SKILL_DIR/scripts/session-start.sh' '$type' '$project'"
-      local se="'$SKILL_DIR/scripts/session-end.sh'   '$type' '$project'"
+      local ss="$(agmsg_shell_quote "$SKILL_DIR/scripts/session-start.sh") $(agmsg_shell_quote "$type") $(agmsg_shell_quote "$project")"
+      local se="$(agmsg_shell_quote "$SKILL_DIR/scripts/session-end.sh") $(agmsg_shell_quote "$type") $(agmsg_shell_quote "$project")"
       settings_esc=$(add_event_entry "$settings_esc" "SessionStart" "$ss" | sed "s/'/''/g")
       settings_esc=$(add_event_entry "$settings_esc" "SessionEnd"   "$se" | sed "s/'/''/g")
       ;;
     turn)
-      local cmd="'$SKILL_DIR/scripts/check-inbox.sh' '$type' '$project'"
+      local cmd="$(agmsg_shell_quote "$SKILL_DIR/scripts/check-inbox.sh") $(agmsg_shell_quote "$type") $(agmsg_shell_quote "$project")"
       settings_esc=$(add_event_entry "$settings_esc" "Stop" "$cmd" | sed "s/'/''/g")
       ;;
     both)
-      local ss="'$SKILL_DIR/scripts/session-start.sh' '$type' '$project'"
-      local se="'$SKILL_DIR/scripts/session-end.sh'   '$type' '$project'"
-      local st="'$SKILL_DIR/scripts/check-inbox.sh'   '$type' '$project'"
+      local ss="$(agmsg_shell_quote "$SKILL_DIR/scripts/session-start.sh") $(agmsg_shell_quote "$type") $(agmsg_shell_quote "$project")"
+      local se="$(agmsg_shell_quote "$SKILL_DIR/scripts/session-end.sh") $(agmsg_shell_quote "$type") $(agmsg_shell_quote "$project")"
+      local st="$(agmsg_shell_quote "$SKILL_DIR/scripts/check-inbox.sh") $(agmsg_shell_quote "$type") $(agmsg_shell_quote "$project")"
       settings_esc=$(add_event_entry "$settings_esc" "SessionStart" "$ss" | sed "s/'/''/g")
       settings_esc=$(add_event_entry "$settings_esc" "SessionEnd"   "$se" | sed "s/'/''/g")
       settings_esc=$(add_event_entry "$settings_esc" "Stop"         "$st" | sed "s/'/''/g")
@@ -255,7 +258,7 @@ EOF
   cat <<EOF
 
 AGMSG-DIRECTIVE: For this running session, invoke the Monitor tool now with:
-  command: $watch $session_id $project $type
+  command: $(agmsg_shell_quote "$watch") $(agmsg_shell_quote "$session_id") $(agmsg_shell_quote "$project") $(agmsg_shell_quote "$type")
   description: agmsg inbox stream
   persistent: true
 
@@ -277,6 +280,8 @@ do_set() {
   local MODE="${1:?Usage: delivery.sh set <mode> <type> <project_path>}"
   local TYPE="${2:?Missing type}"
   local PROJECT="${3:?Missing project_path}"
+
+  agmsg_validate_type "$TYPE"
 
   case "$MODE" in monitor|turn|both|off) ;; *)
     echo "Unknown mode: $MODE (use monitor|turn|both|off)" >&2; exit 1 ;;
@@ -314,6 +319,7 @@ do_status() {
   # a project-scoped mode, so we just skip the mode line and report the
   # global watcher state below.
   if [ -n "$TYPE" ] && [ -n "$PROJECT" ]; then
+    agmsg_validate_type "$TYPE"
     local hf
     hf=$(resolve_hooks_file "$TYPE" "$PROJECT")
     if [ "$TYPE" = "gemini" ] || [ "$TYPE" = "antigravity" ]; then
@@ -325,15 +331,17 @@ do_status() {
     else
       local has_ss=0 has_st=0
       if [ -f "$hf" ]; then
+        local hf_sql
+        hf_sql=$(agmsg_sql_literal "$hf")
         has_ss=$(sqlite3 :memory: "
           SELECT EXISTS(
-            SELECT 1 FROM json_each(json_extract(readfile('$hf'), '\$.hooks.SessionStart')) AS s,
+            SELECT 1 FROM json_each(json_extract(readfile($hf_sql), '\$.hooks.SessionStart')) AS s,
               json_each(json_extract(s.value, '\$.hooks')) AS h
             WHERE instr(json_extract(h.value, '\$.command'), '$SKILL_NAME') > 0
           );" 2>/dev/null || echo 0)
         has_st=$(sqlite3 :memory: "
           SELECT EXISTS(
-            SELECT 1 FROM json_each(json_extract(readfile('$hf'), '\$.hooks.Stop')) AS s,
+            SELECT 1 FROM json_each(json_extract(readfile($hf_sql), '\$.hooks.Stop')) AS s,
               json_each(json_extract(s.value, '\$.hooks')) AS h
             WHERE instr(json_extract(h.value, '\$.command'), '$SKILL_NAME') > 0
           );" 2>/dev/null || echo 0)
@@ -419,6 +427,7 @@ do_restart() {
   killed=$(kill_all_watchers)
   echo "Killed $killed watch process(es)."
   if [ -n "$TYPE" ] && [ -n "$PROJECT" ]; then
+    agmsg_validate_type "$TYPE"
     emit_stop_directive
     emit_monitor_directive "$TYPE" "$PROJECT"
   else

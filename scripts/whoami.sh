@@ -14,7 +14,10 @@ PROJECT_PATH="${1:?Usage: whoami.sh <project_path> <type>}"
 AGENT_TYPE="${2:?Usage: whoami.sh <project_path> <type>}"
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/lib/safety.sh"
 TEAMS_DIR="$SCRIPT_DIR/../teams"
+
+agmsg_validate_type "$AGENT_TYPE"
 
 if [ ! -d "$TEAMS_DIR" ]; then
   echo "not_joined=true available_teams=none"
@@ -33,16 +36,16 @@ ALL_TEAMS=""
 
 for config_file in "$TEAMS_DIR"/*/config.json; do
   [ -f "$config_file" ] || continue
-  CONFIG_ESCAPED=$(sed "s/'/''/g" "$config_file")
-  TEAM_NAME=$(sqlite3 :memory: ".param set :json '$CONFIG_ESCAPED'" \
-    "SELECT json_extract(:json, '$.name');")
+  CONFIG_SQL=$(agmsg_sql_literal "$(cat "$config_file")")
+  TEAM_NAME=$(sqlite3 :memory: "SELECT json_extract($CONFIG_SQL, '$.name');")
+  agmsg_validate_name "team" "$TEAM_NAME"
   ALL_TEAMS="${ALL_TEAMS:+$ALL_TEAMS,}$TEAM_NAME"
 
   while IFS='	' read -r agent_name; do
     [ -n "$agent_name" ] || continue
     SUGGESTED_MATCHES="${SUGGESTED_MATCHES:+$SUGGESTED_MATCHES
 }$TEAM_NAME	$agent_name"
-  done < <(sqlite3 -separator '	' :memory: ".param set :json '$CONFIG_ESCAPED'" "
+  done < <(sqlite3 -separator '	' :memory: "
     WITH agents AS (
       SELECT
         key AS name,
@@ -50,11 +53,11 @@ for config_file in "$TEAMS_DIR"/*/config.json; do
           WHEN json_type(json_extract(value, '\$.registrations')) = 'array' THEN json_extract(value, '\$.registrations')
           ELSE json_array(json_object('type', json_extract(value, '\$.type'), 'project', json_extract(value, '\$.project')))
         END AS registrations
-      FROM json_each(json_extract(:json, '\$.agents'))
+      FROM json_each(json_extract($CONFIG_SQL, '\$.agents'))
     )
     SELECT DISTINCT name
     FROM agents, json_each(agents.registrations) AS r
-    WHERE json_extract(r.value, '\$.type') = '$AGENT_TYPE';
+    WHERE json_extract(r.value, '\$.type') = $(agmsg_sql_literal "$AGENT_TYPE");
   ")
 done
 

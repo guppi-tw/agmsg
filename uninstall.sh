@@ -42,6 +42,10 @@ confirm() {
   [ "${input:-n}" = "y" ] || [ "${input:-n}" = "Y" ]
 }
 
+sql_literal() {
+  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"
+}
+
 # --- Find installed skill directories ---
 SKILL_DIRS=()
 for d in "$AGENTS_DIR"/skills/*/; do
@@ -73,9 +77,9 @@ for SKILL_DIR in "${SKILL_DIRS[@]}"; do
   for config in "$TEAMS_DIR"/*/config.json; do
     [ -f "$config" ] || continue
 
+    config_sql=$(sql_literal "$(cat "$config")")
     projects=$(sqlite3 -separator '	' :memory: \
-      ".param set :json '$(sed "s/'/''/g" "$config")'" \
-      "SELECT json_extract(value, '$.project') FROM json_each(json_extract(:json, '$.agents'))
+      "SELECT json_extract(value, '$.project') FROM json_each(json_extract($config_sql, '$.agents'))
        WHERE json_extract(value, '$.type') = 'claude-code'
          AND json_extract(value, '$.project') IS NOT NULL;" 2>/dev/null || true)
 

@@ -20,6 +20,14 @@ SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEAMS_DIR="$SKILL_DIR/teams"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/actas-lock.sh"
+source "$SCRIPT_DIR/lib/safety.sh"
+
+agmsg_validate_type "$AGENT_TYPE"
+if [ -n "$TARGET_AGENT" ]; then
+  agmsg_validate_name "agent" "$TARGET_AGENT"
+fi
+PROJECT_PATH_SQL=$(agmsg_sql_literal "$PROJECT_PATH")
+AGENT_TYPE_SQL=$(agmsg_sql_literal "$AGENT_TYPE")
 
 if [ -z "$TARGET_AGENT" ]; then
   WHOAMI=$(bash "$SCRIPT_DIR/whoami.sh" "$PROJECT_PATH" "$AGENT_TYPE")
@@ -32,6 +40,7 @@ if [ -z "$TARGET_AGENT" ]; then
     echo "No registered identity found for this project/type." >&2
     exit 1
   fi
+  agmsg_validate_name "agent" "$TARGET_AGENT"
 fi
 
 if [ ! -d "$TEAMS_DIR" ]; then
@@ -46,10 +55,10 @@ for TEAM_CONFIG in "$TEAMS_DIR"/*/config.json; do
   [ -f "$TEAM_CONFIG" ] || continue
   TEAM_DIR="$(dirname "$TEAM_CONFIG")"
   TEAM_NAME="$(basename "$TEAM_DIR")"
-  CONFIG_ESCAPED=$(sed "s/'/''/g" "$TEAM_CONFIG")
+  agmsg_validate_name "team" "$TEAM_NAME"
+  CONFIG_SQL=$(agmsg_sql_literal "$(cat "$TEAM_CONFIG")")
 
-  AGENT_JSON=$(sqlite3 :memory: ".param set :json '$CONFIG_ESCAPED'" \
-    "SELECT json_extract(:json, '$.agents.$TARGET_AGENT');")
+  AGENT_JSON=$(sqlite3 :memory: "SELECT json_extract($CONFIG_SQL, '$.agents.$TARGET_AGENT');")
   if [ -z "$AGENT_JSON" ] || [ "$AGENT_JSON" = "null" ]; then
     continue
   fi
@@ -74,8 +83,8 @@ for TEAM_CONFIG in "$TEAMS_DIR"/*/config.json; do
   MATCH_COUNT=$(sqlite3 :memory: "
     SELECT count(*)
     FROM json_each(json_extract('$NORMALIZED_ESCAPED', '\$.registrations'))
-    WHERE json_extract(value, '\$.type') = '$AGENT_TYPE'
-      AND json_extract(value, '\$.project') = '$PROJECT_PATH';
+    WHERE json_extract(value, '\$.type') = $AGENT_TYPE_SQL
+      AND json_extract(value, '\$.project') = $PROJECT_PATH_SQL;
   ")
   if [ "$MATCH_COUNT" -eq 0 ]; then
     continue
@@ -88,8 +97,8 @@ for TEAM_CONFIG in "$TEAMS_DIR"/*/config.json; do
         SELECT json_group_array(json(value))
         FROM json_each(json_extract('$NORMALIZED_ESCAPED', '\$.registrations'))
         WHERE NOT (
-          json_extract(value, '\$.type') = '$AGENT_TYPE'
-          AND json_extract(value, '\$.project') = '$PROJECT_PATH'
+          json_extract(value, '\$.type') = $AGENT_TYPE_SQL
+          AND json_extract(value, '\$.project') = $PROJECT_PATH_SQL
         )
       ), json('[]'))
     );
@@ -100,11 +109,9 @@ for TEAM_CONFIG in "$TEAMS_DIR"/*/config.json; do
   ")
 
   if [ "$REMAINING" -eq 0 ]; then
-    UPDATED=$(sqlite3 :memory: ".param set :json '$CONFIG_ESCAPED'" \
-      "SELECT json_remove(:json, '$.agents.$TARGET_AGENT');")
+    UPDATED=$(sqlite3 :memory: "SELECT json_remove($CONFIG_SQL, '$.agents.$TARGET_AGENT');")
   else
-    UPDATED=$(sqlite3 :memory: ".param set :json '$CONFIG_ESCAPED'" \
-      "SELECT json_set(:json, '$.agents.$TARGET_AGENT', json('$FILTERED_ESCAPED'));")
+    UPDATED=$(sqlite3 :memory: "SELECT json_set($CONFIG_SQL, '$.agents.$TARGET_AGENT', json('$FILTERED_ESCAPED'));")
   fi
 
   AGENT_COUNT=$(sqlite3 :memory: "

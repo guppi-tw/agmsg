@@ -12,6 +12,9 @@ SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/actas-lock.sh"
+source "$SCRIPT_DIR/lib/safety.sh"
+
+agmsg_validate_type "$TYPE"
 
 # Prevent infinite loop: if stop hook is already active, exit silently
 INPUT=$(cat 2>/dev/null || true)
@@ -52,6 +55,7 @@ TEAMS=$(echo "$WHOAMI" | sed -n 's/.*teams=\([^ ]*\).*/\1/p')
 if [ -z "$AGENT" ] || [ -z "$TEAMS" ]; then
   exit 0
 fi
+agmsg_validate_name "agent" "$AGENT"
 
 # Cooldown check. The marker is hook runtime state, not message storage, so it
 # lives in the skill's run dir — independent of AGMSG_STORAGE_PATH. Keeping it
@@ -94,6 +98,7 @@ if [ ! -f "$DB" ]; then exit 0; fi
 OUTPUT=""
 IFS=',' read -ra TEAM_LIST <<< "$TEAMS"
 for team in "${TEAM_LIST[@]}"; do
+  agmsg_validate_name "team" "$team"
   # Honor actas exclusivity locks. If (team, AGENT) is currently held by
   # another live session, that session is the owner of that role's inbox —
   # don't deliver here. Mirrors the per-pair filtering watch.sh does for
@@ -112,7 +117,7 @@ for team in "${TEAM_LIST[@]}"; do
 
   RESULT=$(sqlite3 "$DB" "
     SELECT from_agent || char(31) || replace(replace(body, char(10), '\n'), char(9), '\t') || char(31) || created_at
-    FROM messages WHERE team='$team' AND to_agent='$AGENT' AND read_at IS NULL
+    FROM messages WHERE team=$(agmsg_sql_literal "$team") AND to_agent=$(agmsg_sql_literal "$AGENT") AND read_at IS NULL
     ORDER BY created_at ASC;
   ")
   if [ -n "$RESULT" ]; then
@@ -123,7 +128,7 @@ for team in "${TEAM_LIST[@]}"; do
     done <<< "$RESULT"
     OUTPUT+=$'\n'
     # Mark as read
-    sqlite3 "$DB" "UPDATE messages SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE team='$team' AND to_agent='$AGENT' AND read_at IS NULL;" 2>/dev/null || true
+    sqlite3 "$DB" "UPDATE messages SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE team=$(agmsg_sql_literal "$team") AND to_agent=$(agmsg_sql_literal "$AGENT") AND read_at IS NULL;" 2>/dev/null || true
   fi
 done
 

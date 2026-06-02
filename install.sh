@@ -20,6 +20,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AGENTS_DIR="$HOME/.agents"
+source "$SCRIPT_DIR/scripts/lib/safety.sh"
 
 # --- Defaults ---
 CMD_NAME=""
@@ -113,6 +114,7 @@ fi
 
 # --- Apply defaults ---
 CMD_NAME="${CMD_NAME:-agmsg}"
+agmsg_validate_name "command name" "$CMD_NAME"
 SKILL_DIR="$AGENTS_DIR/skills/$CMD_NAME"
 
 # --- Install skill ---

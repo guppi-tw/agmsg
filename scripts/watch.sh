@@ -37,9 +37,13 @@ SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/lib/storage.sh"
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/lib/actas-lock.sh"
+source "$SCRIPT_DIR/lib/safety.sh"
 DB="$(agmsg_db_path)"
 RUN_DIR="$SKILL_DIR/run"
 PIDFILE="$RUN_DIR/watch.$SESSION_ID.pid"
+
+agmsg_validate_type "$AGENT_TYPE"
+[ -n "$ACTIVE_NAME" ] && agmsg_validate_name "active agent" "$ACTIVE_NAME"
 
 # Resolve poll interval. Env var wins over config, default 5s.
 INTERVAL="${AGMSG_WATCH_INTERVAL:-}"
@@ -154,9 +158,9 @@ sql_escape() { printf '%s' "$1" | sed "s/'/''/g"; }
 WHERE_PAIRS=""
 while IFS=$'\t' read -r team agent; do
   [ -z "$team" ] && continue
-  t_esc=$(sql_escape "$team")
-  a_esc=$(sql_escape "$agent")
-  pair="(team='$t_esc' AND to_agent='$a_esc')"
+  agmsg_validate_name "team" "$team"
+  agmsg_validate_name "agent" "$agent"
+  pair="(team=$(agmsg_sql_literal "$team") AND to_agent=$(agmsg_sql_literal "$agent"))"
   WHERE_PAIRS="${WHERE_PAIRS:+$WHERE_PAIRS OR }$pair"
 done <<< "$PAIRS"
 
